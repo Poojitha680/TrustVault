@@ -1,0 +1,13 @@
+# Normalize line endings for cross-platform consistency.
+# All text files use LF in the repository. Git will convert to
+# the platform native ending on checkout (CRLF on Windows, LF on Linux/macOS).
+* text=auto eol=lf
+
+# Explicitly mark binary files to prevent corruption
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.db binary
+*.enc binary
+*.lock text eol=lf
