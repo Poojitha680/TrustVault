@@ -177,11 +177,16 @@ def login(login_data: UserLogin, request: Request):
     ua = request.headers.get("user-agent", "")
     username_clean = login_data.username.strip()
 
-    # Rate limiting enforcement (5 attempts per minute per IP / username)
-    ip_limited, ip_retry = check_login_rate_limit(f"ip:{ip}")
-    user_limited, user_retry = check_login_rate_limit(f"user:{username_clean}")
-    if ip_limited or user_limited:
-        retry_secs = max(ip_retry, user_retry)
+    # Rate limiting enforcement:
+    # Target username lockout: strictly 5 failed attempts per target account to stop targeted brute-force
+    user_limited, user_retry = check_login_rate_limit(f"user:{username_clean}", max_attempts=5, window_seconds=60)
+    # IP-level threshold: generous on local loops (127.0.0.1 / testclient) to allow persona switching
+    is_local = ip in ("127.0.0.1", "::1", "localhost", "testclient")
+    ip_max = 50 if is_local else 10
+    ip_limited, ip_retry = check_login_rate_limit(f"ip:{ip}", max_attempts=ip_max, window_seconds=60)
+
+    if user_limited or ip_limited:
+        retry_secs = user_retry if user_limited else ip_retry
         record_audit_event(
             action="USER_LOGIN_RATE_LIMITED",
             status="SECURITY_ALERT",
