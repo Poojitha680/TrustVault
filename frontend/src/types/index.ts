@@ -32,6 +32,8 @@ export interface Document {
   owner_id: number;
   owner_username?: string;
   my_permission?: 'owner' | 'read' | 'edit';
+  can_download?: boolean;
+  allow_viewer_download?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -42,6 +44,7 @@ export interface PermissionEntry {
   full_name: string;
   email: string;
   permission_level: PermissionLevel;
+  can_download?: boolean;
   granted_by: number;
   granted_by_username?: string;
   granted_at: string;

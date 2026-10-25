@@ -1,25 +1,51 @@
+import shutil
+import tempfile
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.app.database import init_db
+import backend.app.config as app_config
+import backend.app.database as app_db
+import backend.app.storage as app_storage
 from backend.app.main import app
-from backend.app.seed import seed_database
+from backend.app.security import clear_login_attempts
 
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_environment():
-    """Ensure database schema is initialized and seeded with test personas."""
-    init_db()
+    """Isolate tests into a temporary SQLite database and storage directory."""
+    temp_dir = tempfile.mkdtemp(prefix="trustvault_test_")
+    test_db_path = Path(temp_dir) / "test_trustvault.db"
+    test_storage_dir = Path(temp_dir) / "test_vault_storage"
+    test_storage_dir.mkdir(parents=True, exist_ok=True)
+
+    orig_db_path = app_config.DATABASE_PATH
+    orig_storage_dir = app_config.STORAGE_DIR
+
+    app_config.DATABASE_PATH = test_db_path
+    app_db.DATABASE_PATH = test_db_path
+    app_config.STORAGE_DIR = test_storage_dir
+    app_storage.STORAGE_DIR = test_storage_dir
+
+    app_db.init_db()
+    from backend.app.seed import seed_database
     seed_database()
+
+    yield
+
+    # Restore original paths and cleanup test files
+    app_config.DATABASE_PATH = orig_db_path
+    app_db.DATABASE_PATH = orig_db_path
+    app_config.STORAGE_DIR = orig_storage_dir
+    app_storage.STORAGE_DIR = orig_storage_dir
+    shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 @pytest.fixture
 def client():
     """Returns a test client instance."""
     return TestClient(app)
-
-
-from backend.app.security import clear_login_attempts
 
 
 def get_auth_headers_for(client: TestClient, username: str, password: str) -> dict:

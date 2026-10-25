@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from './context/AuthContext';
-import { Document, DocumentSensitivity } from './types';
+import { Document } from './types';
 import { api, ApiError } from './services/api';
 import { Navbar } from './components/Navbar';
 import { LoginView } from './components/LoginView';
@@ -10,7 +10,6 @@ import { SharingModal } from './components/SharingModal';
 import { AuditDashboard } from './components/AuditDashboard';
 import { ThreatModelView } from './components/ThreatModelView';
 import {
-  FileText,
   Search,
   Filter,
   Plus,
@@ -19,8 +18,6 @@ import {
   Share2,
   Eye,
   ShieldAlert,
-  ShieldCheck,
-  HardDrive,
   RefreshCw,
   AlertCircle,
   CheckCircle2,
@@ -48,13 +45,7 @@ export const AppContent: React.FC = () => {
   const [probeResult, setProbeResult] = useState<{ id: number; status: number; message: string } | null>(null);
   const [probing, setProbing] = useState(false);
 
-  useEffect(() => {
-    if (user) {
-      loadDocuments();
-    }
-  }, [user, selectedCategory]);
-
-  const loadDocuments = async () => {
+  const loadDocuments = useCallback(async () => {
     setLoadingDocs(true);
     setErrorMsg(null);
     try {
@@ -72,7 +63,13 @@ export const AppContent: React.FC = () => {
     } finally {
       setLoadingDocs(false);
     }
-  };
+  }, [searchQuery, selectedCategory]);
+
+  useEffect(() => {
+    if (user) {
+      loadDocuments();
+    }
+  }, [user, loadDocuments]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -111,9 +108,9 @@ export const AppContent: React.FC = () => {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-vault-950 flex items-center justify-center text-slate-400">
+      <div className="min-h-screen bg-[#F5F7FA] flex items-center justify-center text-[#64748B]">
         <div className="flex flex-col items-center space-y-3">
-          <div className="w-8 h-8 border-2 border-sky-500/20 border-t-sky-500 rounded-full animate-spin" />
+          <div className="w-8 h-8 border-2 border-[#2563EB]/20 border-t-[#2563EB] rounded-full animate-spin" />
           <span className="text-sm font-medium">Initializing Secure Session...</span>
         </div>
       </div>
@@ -127,7 +124,7 @@ export const AppContent: React.FC = () => {
   const isOwnerOrAdmin = user.role === 'owner' || user.role === 'admin';
 
   return (
-    <div className="min-h-screen bg-vault-950 flex flex-col text-slate-200">
+    <div className="min-h-screen bg-[#F5F7FA] flex flex-col text-[#172033]">
       <Navbar activeTab={activeTab} setActiveTab={setActiveTab} />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grow w-full">
@@ -136,23 +133,29 @@ export const AppContent: React.FC = () => {
           <div className="space-y-6">
             {/* Notifications */}
             {errorMsg && (
-              <div className="p-4 rounded-xl bg-rose-950/60 border border-rose-800 text-rose-300 text-xs flex items-center justify-between animate-fade-in">
+              <div className="p-4 rounded-xl bg-[#FEF2F2] border border-[#FECACA] text-[#B91C1C] text-xs flex items-center justify-between animate-fade-in">
                 <div className="flex items-center space-x-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                  <AlertCircle className="w-4 h-4 shrink-0 text-[#B91C1C]" />
                   <span>{errorMsg}</span>
                 </div>
-                <button onClick={() => setErrorMsg(null)} className="text-slate-400 hover:text-white text-xs">
+                <button
+                  onClick={() => setErrorMsg(null)}
+                  className="text-[#64748B] hover:text-[#172033] text-xs font-medium"
+                >
                   Dismiss
                 </button>
               </div>
             )}
             {successBanner && (
-              <div className="p-4 rounded-xl bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-xs flex items-center justify-between animate-fade-in">
+              <div className="p-4 rounded-xl bg-[#F0FDF4] border border-[#BBF7D0] text-[#15803D] text-xs flex items-center justify-between animate-fade-in">
                 <div className="flex items-center space-x-2">
-                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-[#15803D]" />
                   <span>{successBanner}</span>
                 </div>
-                <button onClick={() => setSuccessBanner(null)} className="text-slate-400 hover:text-white text-xs">
+                <button
+                  onClick={() => setSuccessBanner(null)}
+                  className="text-[#64748B] hover:text-[#172033] text-xs font-medium"
+                >
                   Dismiss
                 </button>
               </div>
@@ -161,11 +164,11 @@ export const AppContent: React.FC = () => {
             {/* Top Toolbar */}
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
               <div>
-                <h1 className="text-2xl font-bold text-white tracking-tight flex items-center space-x-2.5">
-                  <Lock className="w-6 h-6 text-sky-400" />
+                <h1 className="text-2xl font-bold text-[#172033] tracking-tight flex items-center space-x-2.5">
+                  <Lock className="w-6 h-6 text-[#2563EB]" />
                   <span>Confidential Document Vault</span>
                 </h1>
-                <p className="text-xs text-slate-400 mt-1">
+                <p className="text-xs text-[#64748B] mt-1">
                   Server-enforced access isolation &bull; Only authorized documents are visible or discoverable
                 </p>
               </div>
@@ -174,7 +177,7 @@ export const AppContent: React.FC = () => {
                 {isOwnerOrAdmin && (
                   <button
                     onClick={() => setIsUploadOpen(true)}
-                    className="px-4 py-2 bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white text-xs font-semibold rounded-xl shadow-lg shadow-sky-500/20 flex items-center space-x-2 transition-all"
+                    className="px-4 py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs font-semibold rounded-lg shadow-sm flex items-center space-x-2 transition-colors"
                   >
                     <Plus className="w-4 h-4" />
                     <span>Upload Document</span>
@@ -184,7 +187,7 @@ export const AppContent: React.FC = () => {
                 <button
                   onClick={loadDocuments}
                   disabled={loadingDocs}
-                  className="p-2 rounded-xl bg-vault-850 hover:bg-vault-800 border border-vault-border text-slate-300 hover:text-white transition-colors"
+                  className="p-2 rounded-lg bg-white hover:bg-[#F1F5F9] border border-[#E2E8F0] text-[#64748B] hover:text-[#172033] transition-colors"
                   title="Refresh Vault Documents"
                 >
                   <RefreshCw className={`w-4 h-4 ${loadingDocs ? 'animate-spin' : ''}`} />
@@ -193,24 +196,24 @@ export const AppContent: React.FC = () => {
             </div>
 
             {/* Search & Category Filter Bar */}
-            <div className="p-4 rounded-2xl bg-vault-900 border border-vault-border flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="p-4 rounded-xl bg-white border border-[#E2E8F0] flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm">
               <form onSubmit={handleSearch} className="relative w-full sm:w-96">
-                <Search className="w-4 h-4 absolute left-3.5 top-3 text-slate-400" />
+                <Search className="w-4 h-4 absolute left-3.5 top-3 text-[#64748B]" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                   placeholder="Search authorized titles or filenames..."
-                  className="w-full pl-10 pr-3.5 py-2 bg-vault-950 border border-vault-border rounded-xl text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
+                  className="w-full pl-10 pr-3.5 py-2 bg-white border border-[#E2E8F0] rounded-lg text-xs text-[#172033] placeholder-[#94A3B8] focus:outline-none focus:ring-2 focus:ring-[#2563EB]/40 focus:border-[#2563EB]"
                 />
               </form>
 
               <div className="flex items-center space-x-2 w-full sm:w-auto">
-                <Filter className="w-4 h-4 text-slate-400 shrink-0" />
+                <Filter className="w-4 h-4 text-[#64748B] shrink-0" />
                 <select
                   value={selectedCategory}
                   onChange={e => setSelectedCategory(e.target.value)}
-                  className="px-3 py-2 bg-vault-950 border border-vault-border rounded-xl text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50 w-full sm:w-auto"
+                  className="px-3 py-2 bg-white border border-[#E2E8F0] rounded-lg text-xs text-[#172033] focus:outline-none focus:ring-2 focus:ring-[#2563EB]/40 focus:border-[#2563EB] w-full sm:w-auto"
                 >
                   <option value="">All Categories</option>
                   <option value="Contracts">Contracts</option>
@@ -227,18 +230,18 @@ export const AppContent: React.FC = () => {
 
             {/* Document Cards Grid */}
             {loadingDocs ? (
-              <div className="py-16 text-center text-slate-500">
-                <div className="w-6 h-6 border-2 border-sky-500/20 border-t-sky-500 rounded-full animate-spin mx-auto mb-2" />
+              <div className="py-16 text-center text-[#64748B]">
+                <div className="w-6 h-6 border-2 border-[#2563EB]/20 border-t-[#2563EB] rounded-full animate-spin mx-auto mb-2" />
                 Authorizing and retrieving vault documents...
               </div>
             ) : documents.length === 0 ? (
-              <div className="py-16 text-center rounded-2xl bg-vault-900/40 border border-vault-border space-y-3">
-                <ShieldAlert className="w-10 h-10 mx-auto text-slate-500" />
-                <h3 className="text-base font-semibold text-slate-300">No Documents Accessible</h3>
-                <p className="text-xs text-slate-500 max-w-md mx-auto">
+              <div className="py-16 text-center rounded-xl bg-white border border-[#E2E8F0] space-y-3 shadow-sm">
+                <ShieldAlert className="w-10 h-10 mx-auto text-[#94A3B8]" />
+                <h3 className="text-base font-semibold text-[#172033]">No Documents Found</h3>
+                <p className="text-xs text-[#64748B] max-w-md mx-auto">
                   {user.role === 'viewer'
-                    ? "You currently have no active read or edit grants on confidential documents. To test access, switch to an Owner persona and grant access to @" + user.username + "."
-                    : "No matching documents found in your authorized vault repository."}
+                    ? "No documents currently match your active search filters or authorized organization scope."
+                    : "No matching documents found in your vault repository."}
                 </p>
               </div>
             ) : (
@@ -248,21 +251,21 @@ export const AppContent: React.FC = () => {
                   return (
                     <div
                       key={doc.id}
-                      className="glass-card rounded-2xl p-5 flex flex-col justify-between space-y-4 hover:border-sky-500/40 transition-all group"
+                      className="bg-white border border-[#E2E8F0] rounded-xl p-5 flex flex-col justify-between space-y-4 hover:border-[#93C5FD] hover:shadow-md transition-all group"
                     >
                       <div className="space-y-3">
                         {/* Header Badges */}
                         <div className="flex items-center justify-between text-xs">
-                          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-vault-800 text-slate-300 border border-vault-border">
+                          <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-[#F1F5F9] text-[#172033] border border-[#E2E8F0]">
                             {doc.category}
                           </span>
                           <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                            className={`px-2 py-0.5 rounded text-[11px] font-semibold border ${
                               doc.sensitivity === 'Restricted'
-                                ? 'bg-rose-950/70 text-rose-300 border-rose-800'
+                                ? 'bg-[#FEF2F2] text-[#B91C1C] border-[#FECACA]'
                                 : doc.sensitivity === 'Confidential'
-                                ? 'bg-amber-950/70 text-amber-300 border-amber-800'
-                                : 'bg-emerald-950/70 text-emerald-300 border-emerald-800'
+                                ? 'bg-[#FFFBEB] text-[#B45309] border-[#FDE68A]'
+                                : 'bg-[#F0FDF4] text-[#15803D] border-[#BBF7D0]'
                             }`}
                           >
                             {doc.sensitivity}
@@ -273,57 +276,68 @@ export const AppContent: React.FC = () => {
                         <div>
                           <h3
                             onClick={() => setSelectedDocForDetail(doc)}
-                            className="text-sm font-semibold text-white group-hover:text-sky-300 transition-colors cursor-pointer line-clamp-2"
+                            className="text-sm font-semibold text-[#172033] group-hover:text-[#2563EB] transition-colors cursor-pointer line-clamp-2"
                           >
                             {doc.title}
                           </h3>
-                          <p className="text-[11px] font-mono text-slate-400 mt-1 truncate">
+                          <p className="text-xs font-mono text-[#64748B] mt-1 truncate">
                             {doc.filename}
                           </p>
                         </div>
 
                         {/* Fingerprint preview */}
-                        <div className="p-2 rounded-lg bg-vault-950/80 border border-vault-border/60 text-[10px] font-mono text-slate-400 truncate">
-                          <span className="text-slate-500">SHA256: </span>
-                          <span className="text-sky-400">{doc.sha256_hash.slice(0, 16)}...</span>
+                        <div className="p-2 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] text-[11px] font-mono text-[#64748B] truncate">
+                          <span className="text-[#94A3B8]">SHA256: </span>
+                          <span className="text-[#0F766E] font-medium">{doc.sha256_hash.slice(0, 16)}...</span>
                         </div>
                       </div>
 
                       {/* Footer Details & Buttons */}
-                      <div className="pt-3 border-t border-vault-border/60 space-y-3">
-                        <div className="flex items-center justify-between text-[11px] text-slate-400">
-                          <span>Owner: <strong className="text-slate-300">@{doc.owner_username || doc.owner_id}</strong></span>
+                      <div className="pt-3 border-t border-[#E2E8F0] space-y-3">
+                        <div className="flex items-center justify-between text-xs text-[#64748B]">
+                          <span>
+                            Owner: <strong className="text-[#172033]">@{doc.owner_username || doc.owner_id}</strong>
+                          </span>
                           <span className="font-mono">{(doc.file_size / 1024).toFixed(1)} KB</span>
                         </div>
 
                         <div className="flex items-center justify-between pt-1">
                           <button
                             onClick={() => setSelectedDocForDetail(doc)}
-                            className="px-3 py-1.5 rounded-lg bg-vault-800 hover:bg-vault-700 text-slate-200 text-xs font-medium flex items-center space-x-1.5 transition-colors"
+                            className="px-3 py-1.5 rounded-lg bg-white hover:bg-[#F8FAFC] border border-[#E2E8F0] text-[#172033] text-xs font-medium flex items-center space-x-1.5 transition-colors shadow-2xs cursor-pointer"
                           >
-                            <Eye className="w-3.5 h-3.5 text-sky-400" />
-                            <span>Details</span>
+                            <Eye className="w-3.5 h-3.5 text-[#2563EB]" />
+                            <span>Preview & Details</span>
                           </button>
 
                           <div className="flex items-center space-x-1.5">
-                            {isOwner && (
+                            {(isOwner || user.role === 'admin') && (
                               <button
                                 onClick={() => setSelectedDocForSharing(doc)}
-                                className="p-1.5 rounded-lg text-slate-400 hover:text-sky-300 hover:bg-vault-800 transition-colors"
+                                className="p-1.5 rounded-lg text-[#64748B] hover:text-[#2563EB] hover:bg-[#EFF6FF] transition-colors cursor-pointer"
                                 title="Manage Sharing & AI Assistant"
                               >
                                 <Share2 className="w-4 h-4" />
                               </button>
                             )}
 
-                            <button
-                              onClick={() => api.downloadDocument(doc.id, doc.filename)}
-                              className="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold flex items-center space-x-1 shadow-sm transition-colors"
-                              title="Secure Zero-Cache Download"
-                            >
-                              <Download className="w-3.5 h-3.5" />
-                              <span>Download</span>
-                            </button>
+                            {(user.role !== 'viewer' || Boolean(doc.can_download || doc.allow_viewer_download)) ? (
+                              <button
+                                onClick={() => api.downloadDocument(doc.id, doc.filename)}
+                                className="px-3 py-1.5 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs font-semibold flex items-center space-x-1 shadow-2xs transition-colors cursor-pointer"
+                                title="Secure Zero-Cache Download"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                                <span>Download</span>
+                              </button>
+                            ) : (
+                              <span
+                                className="px-2 py-1 rounded text-[11px] font-medium bg-[#F1F5F9] text-[#64748B] border border-[#E2E8F0]"
+                                title="Download restricted by policy; in-browser preview available"
+                              >
+                                Preview Only
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -334,16 +348,16 @@ export const AppContent: React.FC = () => {
             )}
 
             {/* Interactive IDOR / Isolation Security Probe Test Panel */}
-            <div className="mt-8 p-5 rounded-2xl bg-gradient-to-br from-vault-900 to-vault-850 border border-vault-border space-y-3">
+            <div className="mt-8 p-5 rounded-xl bg-white border border-[#E2E8F0] shadow-sm space-y-3">
               <div className="flex items-center space-x-2.5">
-                <div className="w-7 h-7 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center">
+                <div className="w-7 h-7 rounded-lg bg-[#FFFBEB] text-[#B45309] border border-[#FDE68A] flex items-center justify-center">
                   <Zap className="w-4 h-4" />
                 </div>
                 <div>
-                  <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                  <h4 className="text-xs font-bold text-[#172033] uppercase tracking-wider">
                     Interactive Security Evaluator: Cross-User Probe Simulator
                   </h4>
-                  <p className="text-[11px] text-slate-400">
+                  <p className="text-xs text-[#64748B]">
                     Test the server's real-time access boundary: Probe document ID #1, #2, #3, or non-existent #999 directly as current user @{user.username}.
                   </p>
                 </div>
@@ -355,7 +369,7 @@ export const AppContent: React.FC = () => {
                     key={targetId}
                     disabled={probing}
                     onClick={() => handleSimulateProbe(targetId)}
-                    className="px-3 py-1.5 rounded-lg bg-vault-950 hover:bg-vault-800 border border-vault-border text-xs font-mono text-slate-300 hover:text-white transition-colors disabled:opacity-50"
+                    className="px-3 py-1.5 rounded-lg bg-[#F8FAFC] hover:bg-[#EFF6FF] border border-[#E2E8F0] text-xs font-mono text-[#172033] hover:border-[#2563EB] transition-colors disabled:opacity-50"
                   >
                     Probe Doc #{targetId}
                   </button>
@@ -364,10 +378,10 @@ export const AppContent: React.FC = () => {
 
               {probeResult && (
                 <div
-                  className={`p-3 rounded-xl border text-xs font-mono animate-fade-in ${
+                  className={`p-3 rounded-lg border text-xs font-mono animate-fade-in ${
                     probeResult.status === 200
-                      ? 'bg-emerald-950/60 border-emerald-800 text-emerald-300'
-                      : 'bg-rose-950/60 border-rose-800 text-rose-300'
+                      ? 'bg-[#F0FDF4] border-[#BBF7D0] text-[#15803D]'
+                      : 'bg-[#FEF2F2] border-[#FECACA] text-[#B91C1C]'
                   }`}
                 >
                   <div className="font-semibold mb-0.5">

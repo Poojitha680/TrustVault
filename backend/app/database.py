@@ -62,6 +62,7 @@ def init_db():
                 category TEXT NOT NULL,
                 sensitivity TEXT NOT NULL DEFAULT 'Confidential',
                 owner_id INTEGER NOT NULL,
+                allow_viewer_download INTEGER NOT NULL DEFAULT 0,
                 is_deleted INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -76,6 +77,7 @@ def init_db():
                 document_id INTEGER NOT NULL,
                 user_id INTEGER NOT NULL,
                 permission_level TEXT NOT NULL CHECK (permission_level IN ('read', 'edit')),
+                can_download INTEGER NOT NULL DEFAULT 0,
                 granted_by INTEGER NOT NULL,
                 granted_at TEXT NOT NULL,
                 FOREIGN KEY (document_id) REFERENCES documents (id) ON DELETE CASCADE,
@@ -84,6 +86,17 @@ def init_db():
                 UNIQUE (document_id, user_id)
             );
         """)
+
+        # Migration checks for existing databases
+        cursor.execute("PRAGMA table_info(documents);")
+        doc_cols = [c["name"] for c in cursor.fetchall()]
+        if "allow_viewer_download" not in doc_cols:
+            cursor.execute("ALTER TABLE documents ADD COLUMN allow_viewer_download INTEGER NOT NULL DEFAULT 0;")
+
+        cursor.execute("PRAGMA table_info(document_permissions);")
+        perm_cols = [c["name"] for c in cursor.fetchall()]
+        if "can_download" not in perm_cols:
+            cursor.execute("ALTER TABLE document_permissions ADD COLUMN can_download INTEGER NOT NULL DEFAULT 0;")
 
         # Revoked Tokens Table (for immediate token cancellation / logout)
         cursor.execute("""

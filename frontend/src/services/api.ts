@@ -77,6 +77,21 @@ export const api = {
     return res;
   },
 
+  async register(data: {
+    full_name: string;
+    email: string;
+    username: string;
+    password: string;
+  }): Promise<TokenResponse> {
+    const res = await request<TokenResponse>('/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    localStorage.setItem('trustvault_token', res.access_token);
+    return res;
+  },
+
   async logout(): Promise<void> {
     try {
       await request('/auth/logout', { method: 'POST' });
@@ -113,12 +128,17 @@ export const api = {
     });
   },
 
-  async toggleUserStatus(userId: number, isActive: boolean): Promise<{ message: string; is_active: boolean }> {
-    const formData = new FormData();
-    formData.append('is_active', String(isActive));
+  async toggleUserStatus(userId: number, _isActive?: boolean): Promise<{ message: string; is_active: boolean }> {
     return request(`/users/${userId}/status`, {
       method: 'PUT',
-      body: formData,
+    });
+  },
+
+  async updateUserRole(userId: number, role: 'admin' | 'owner' | 'viewer'): Promise<User> {
+    return request<User>(`/users/${userId}/role`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role }),
     });
   },
 
@@ -220,6 +240,32 @@ export const api = {
     document.body.removeChild(a);
   },
 
+  async previewDocument(id: number): Promise<{ blob: Blob; url: string; mimeType: string }> {
+    const headers = {
+      ...getAuthHeader(),
+    };
+
+    const response = await fetch(`${API_BASE}/documents/${id}/preview`, {
+      headers,
+    });
+
+    if (!response.ok) {
+      let errorDetail = `Preview failed (${response.status})`;
+      try {
+        const errorJson = await response.json();
+        if (errorJson.detail) errorDetail = errorJson.detail;
+      } catch {
+        // Fallback
+      }
+      throw new ApiError(response.status, errorDetail);
+    }
+
+    const mimeType = response.headers.get('content-type') || 'application/octet-stream';
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    return { blob, url, mimeType };
+  },
+
   // Permissions & Sharing
   async listPermissions(documentId: number): Promise<PermissionEntry[]> {
     return request<PermissionEntry[]>(`/documents/${documentId}/permissions`);
@@ -228,14 +274,16 @@ export const api = {
   async grantPermission(
     documentId: number,
     targetUsernameOrId: string,
-    permissionLevel: PermissionLevel
-  ): Promise<{ message: string; target_user_id: number; permission_level: PermissionLevel }> {
+    permissionLevel: PermissionLevel,
+    canDownload: boolean = false
+  ): Promise<{ message: string; target_user_id: number; permission_level: PermissionLevel; can_download: boolean }> {
     return request(`/documents/${documentId}/permissions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         target_username_or_id: targetUsernameOrId,
         permission_level: permissionLevel,
+        can_download: canDownload,
       }),
     });
   },
@@ -275,6 +323,10 @@ export const api = {
   async getAuditTrail(documentId?: number, limit = 100): Promise<AuditLogEntry[]> {
     const qs = documentId ? `?document_id=${documentId}&limit=${limit}` : `?limit=${limit}`;
     return request<AuditLogEntry[]>(`/audit${qs}`);
+  },
+
+  async getMyActivity(limit = 100): Promise<AuditLogEntry[]> {
+    return request<AuditLogEntry[]>(`/audit?mine=true&limit=${limit}`);
   },
 
   async verifyAuditChain(): Promise<AuditVerificationResult> {

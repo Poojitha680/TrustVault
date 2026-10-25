@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 # User Schemas
@@ -12,6 +12,32 @@ class UserCreate(BaseModel):
     full_name: str = Field(..., min_length=2, max_length=100)
     role: Literal["admin", "owner", "viewer"]
     password: str = Field(..., min_length=8, max_length=128)
+
+
+class UserRegister(BaseModel):
+    full_name: str = Field(..., min_length=2, max_length=100)
+    email: EmailStr
+    username: str = Field(
+        ..., min_length=3, max_length=50, pattern=r"^[a-zA-Z0-9_\-]+$"
+    )
+    password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_strength(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters long.")
+        if not any(c.isupper() for c in v):
+            raise ValueError("Password must contain at least one uppercase letter.")
+        if not any(c.islower() for c in v):
+            raise ValueError("Password must contain at least one lowercase letter.")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Password must contain at least one digit.")
+        return v
+
+
+class UserRoleUpdate(BaseModel):
+    role: Literal["admin", "owner", "viewer"]
 
 
 class UserLogin(BaseModel):
@@ -42,6 +68,7 @@ class DocumentUpdate(BaseModel):
     sensitivity: Literal["Public", "Internal", "Confidential", "Restricted"] | None = (
         None
     )
+    allow_viewer_download: bool | None = None
 
 
 class DocumentResponse(BaseModel):
@@ -57,6 +84,8 @@ class DocumentResponse(BaseModel):
     owner_id: int
     owner_username: str | None = None
     my_permission: str | None = None
+    can_download: bool = True
+    allow_viewer_download: bool = False
     created_at: str
     updated_at: str
 
@@ -68,6 +97,9 @@ class PermissionGrantRequest(BaseModel):
     )
     permission_level: Literal["read", "edit"] = Field(
         ..., description="Access level to grant"
+    )
+    can_download: bool = Field(
+        False, description="Whether to explicitly permit document downloading for viewers"
     )
 
 
@@ -81,6 +113,7 @@ class PermissionEntry(BaseModel):
     full_name: str
     email: str
     permission_level: str
+    can_download: bool = False
     granted_by: int
     granted_by_username: str | None = None
     granted_at: str

@@ -58,6 +58,7 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
+  register: (data: { full_name: string; email: string; username: string; password: string }) => Promise<void>;
   logout: () => Promise<void>;
   switchPersona: (username: string) => Promise<void>;
   refreshUser: () => Promise<void>;
@@ -109,6 +110,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const register = async (data: {
+    full_name: string;
+    email: string;
+    username: string;
+    password: string;
+  }) => {
+    setError(null);
+    try {
+      const res = await api.register(data);
+      setUser(res.user);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setError(err.detail);
+      } else {
+        setError('Registration failed. Please check your information.');
+      }
+      throw err;
+    }
+  };
+
   const logout = async () => {
     try {
       await api.logout();
@@ -131,6 +152,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         user,
         loading,
         login,
+        register,
         logout,
         switchPersona,
         refreshUser,

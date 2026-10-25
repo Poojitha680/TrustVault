@@ -145,11 +145,11 @@ def test_immediate_enforcement_of_revoked_permissions(
     )
     assert pre_grant_res.status_code == 403
 
-    # 2. Alice grants 'read' access to charlie_viewer
+    # 2. Alice grants 'read' access to charlie_viewer with explicit download permission
     grant_res = client.post(
         f"/api/documents/{doc_id}/permissions",
         headers=alice_headers,
-        json={"target_username_or_id": "charlie_viewer", "permission_level": "read"},
+        json={"target_username_or_id": "charlie_viewer", "permission_level": "read", "can_download": True},
     )
     assert grant_res.status_code == 200
     charlie_id = grant_res.json()["target_user_id"]
@@ -197,34 +197,35 @@ def test_editor_cannot_delete_or_grant_permissions(
     assert upload_res.status_code == 200
     doc_id = upload_res.json()["id"]
 
-    # Alice grants Charlie 'edit' permission
-    client.post(
+    # Alice grants Bob (owner/document manager) 'edit' permission
+    grant_res = client.post(
         f"/api/documents/{doc_id}/permissions",
         headers=alice_headers,
-        json={"target_username_or_id": "charlie_viewer", "permission_level": "edit"},
+        json={"target_username_or_id": "bob_owner", "permission_level": "edit"},
     )
+    assert grant_res.status_code == 200
 
-    # Charlie can edit metadata
+    # Bob can edit metadata
     update_res = client.put(
         f"/api/documents/{doc_id}",
-        headers=charlie_headers,
-        json={"title": "Collaborative Project Brief - Revised by Charlie"},
+        headers=bob_headers,
+        json={"title": "Collaborative Project Brief - Revised by Bob"},
     )
     assert update_res.status_code == 200
     assert (
-        update_res.json()["title"] == "Collaborative Project Brief - Revised by Charlie"
+        update_res.json()["title"] == "Collaborative Project Brief - Revised by Bob"
     )
 
-    # Charlie CANNOT grant permissions to Bob
-    charlie_grant = client.post(
+    # Bob CANNOT grant permissions to Charlie
+    bob_grant = client.post(
         f"/api/documents/{doc_id}/permissions",
-        headers=charlie_headers,
-        json={"target_username_or_id": "bob_owner", "permission_level": "read"},
+        headers=bob_headers,
+        json={"target_username_or_id": "charlie_viewer", "permission_level": "read"},
     )
-    assert charlie_grant.status_code == 403
-    assert "strictly restricted to the document owner" in charlie_grant.json()["detail"]
+    assert bob_grant.status_code == 403
+    assert "strictly restricted to the document owner" in bob_grant.json()["detail"]
 
-    # Charlie CANNOT delete the document
-    charlie_del = client.delete(f"/api/documents/{doc_id}", headers=charlie_headers)
-    assert charlie_del.status_code == 403
-    assert "strictly restricted to the document owner" in charlie_del.json()["detail"]
+    # Bob CANNOT delete the document
+    bob_del = client.delete(f"/api/documents/{doc_id}", headers=bob_headers)
+    assert bob_del.status_code == 403
+    assert "strictly restricted to the document owner" in bob_del.json()["detail"]

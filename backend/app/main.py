@@ -37,7 +37,9 @@ from backend.app.schemas import (
     TokenResponse,
     UserCreate,
     UserLogin,
+    UserRegister,
     UserResponse,
+    UserRoleUpdate,
 )
 from backend.app.security import (
     check_login_rate_limit,
@@ -71,7 +73,15 @@ app = FastAPI(
 # CORS setup
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -252,6 +262,127 @@ def login(login_data: UserLogin, request: Request):
             role=user["role"],
             is_active=bool(user["is_active"]),
             created_at=user["created_at"],
+        ),
+    )
+
+
+@app.post("/api/auth/register", response_model=TokenResponse)
+def register(register_data: UserRegister, request: Request):
+    """
+    PUBLIC REGISTRATION ENDPOINT.
+    - Validates email format, unique username and email, and password strength.
+    - Hashes password with Argon2id.
+    - Assigns default 'viewer' role (unauthorized role assignment strictly blocked).
+    - Records tamper-evident USER_REGISTERED audit log.
+    - Issues JWT session for immediate, seamless authentication.
+    """
+    ip = get_client_ip(request)
+    ua = request.headers.get("user-agent", "")
+
+    clean_username = register_data.username.strip().lower()
+    clean_email = register_data.email.strip().lower()
+    clean_full_name = register_data.full_name.strip()
+
+    # Rate limiting on registration (per IP)
+    ip_limited, ip_retry = check_login_rate_limit(f"reg_ip:{ip}")
+    if ip_limited:
+        record_audit_event(
+            action="USER_REGISTRATION_RATE_LIMITED",
+            status="SECURITY_ALERT",
+            username=clean_username,
+            ip_address=ip,
+            user_agent=ua,
+            details=f"Registration rate limit exceeded from IP {ip}. Locked for {ip_retry}s.",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many registration attempts. Please wait {ip_retry} seconds.",
+        )
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM users WHERE username = ?", (clean_username,)
+        )
+        if cursor.fetchone():
+            record_login_attempt(f"reg_ip:{ip}")
+            record_audit_event(
+                action="USER_REGISTRATION_DUPLICATE_USERNAME",
+                status="REFUSED",
+                username=clean_username,
+                ip_address=ip,
+                user_agent=ua,
+                details=f"Registration rejected: username '{clean_username}' already exists.",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Username is already taken. Please choose another username.",
+            )
+
+        cursor.execute("SELECT id FROM users WHERE email = ?", (clean_email,))
+        if cursor.fetchone():
+            record_login_attempt(f"reg_ip:{ip}")
+            record_audit_event(
+                action="USER_REGISTRATION_DUPLICATE_EMAIL",
+                status="REFUSED",
+                username=clean_username,
+                ip_address=ip,
+                user_agent=ua,
+                details=f"Registration rejected: email '{clean_email}' already registered.",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="An account with this email address already exists.",
+            )
+
+        # Clear registration rate limit on valid credentials
+        clear_login_attempts(f"reg_ip:{ip}")
+
+        hashed_password = hash_password(register_data.password)
+        now_iso = datetime.now(UTC).isoformat()
+        assigned_role = "viewer"
+
+        cursor.execute(
+            """
+            INSERT INTO users (username, email, full_name, role, password_hash, is_active, created_at)
+            VALUES (?, ?, ?, ?, ?, 1, ?)
+        """,
+            (
+                clean_username,
+                clean_email,
+                clean_full_name,
+                assigned_role,
+                hashed_password,
+                now_iso,
+            ),
+        )
+        user_id = cursor.lastrowid
+
+    record_audit_event(
+        action="USER_REGISTERED",
+        status="SUCCESS",
+        user_id=user_id,
+        username=clean_username,
+        ip_address=ip,
+        user_agent=ua,
+        details=f"New user registered: '{clean_username}' ({clean_email}) assigned default role '{assigned_role}'",
+    )
+
+    token = create_access_token(
+        data={"sub": user_id, "username": clean_username, "role": assigned_role}
+    )
+
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        user=UserResponse(
+            id=user_id,
+            username=clean_username,
+            email=clean_email,
+            full_name=clean_full_name,
+            role=assigned_role,
+            is_active=True,
+            created_at=now_iso,
         ),
     )
 
@@ -453,6 +584,70 @@ def toggle_user_status(
     }
 
 
+@app.put("/api/users/{user_id}/role", response_model=UserResponse)
+def update_user_role(
+    user_id: int,
+    role_data: UserRoleUpdate,
+    request: Request,
+    current_user: dict[str, Any] = Depends(get_current_user),
+):
+    """
+    Admin-only endpoint to assign permitted roles.
+    Prevents unauthorized self-promotion or role manipulation.
+    """
+    if current_user["role"] != "admin":
+        record_audit_event(
+            action="USER_ROLE_CHANGE_DENIED",
+            status="REFUSED",
+            user_id=current_user["id"],
+            username=current_user["username"],
+            ip_address=get_client_ip(request),
+            user_agent=request.headers.get("user-agent", ""),
+            details=f"Non-admin '{current_user['username']}' attempted unauthorized role modification for user ID {user_id}",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Role assignment requires platform administrator privileges.",
+        )
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, username, email, full_name, role, is_active, created_at FROM users WHERE id = ?",
+            (user_id,),
+        )
+        target = cursor.fetchone()
+        if not target:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="User not found."
+            )
+
+        new_role = role_data.role
+        cursor.execute(
+            "UPDATE users SET role = ? WHERE id = ?", (new_role, user_id)
+        )
+
+    record_audit_event(
+        action="USER_ROLE_UPDATED",
+        status="SUCCESS",
+        user_id=current_user["id"],
+        username=current_user["username"],
+        ip_address=get_client_ip(request),
+        user_agent=request.headers.get("user-agent", ""),
+        details=f"Admin changed role of user '{target['username']}' from '{target['role']}' to '{new_role}'",
+    )
+
+    return UserResponse(
+        id=target["id"],
+        username=target["username"],
+        email=target["email"],
+        full_name=target["full_name"],
+        role=new_role,
+        is_active=bool(target["is_active"]),
+        created_at=target["created_at"],
+    )
+
+
 @app.get("/api/admin/metrics")
 def get_admin_metrics(
     request: Request, current_user: dict[str, Any] = Depends(get_current_user)
@@ -624,22 +819,42 @@ def list_documents(
     Non-granted documents are completely invisible even in search results or count aggregates.
     """
     user_id = current_user["id"]
+    role = current_user.get("role", "viewer")
 
-    query = """
-        SELECT DISTINCT d.id, d.uuid, d.title, d.filename, d.file_size, d.mime_type,
-               d.sha256_hash, d.category, d.sensitivity, d.owner_id, u.username as owner_username,
-               d.created_at, d.updated_at,
-               CASE
-                   WHEN d.owner_id = ? THEN 'owner'
-                   ELSE dp.permission_level
-               END as my_permission
-        FROM documents d
-        JOIN users u ON d.owner_id = u.id
-        LEFT JOIN document_permissions dp ON (dp.document_id = d.id AND dp.user_id = ?)
-        WHERE d.is_deleted = 0
-          AND (d.owner_id = ? OR dp.user_id = ?)
-    """
-    params: list[Any] = [user_id, user_id, user_id, user_id]
+    if role == "admin":
+        query = """
+            SELECT DISTINCT d.id, d.uuid, d.title, d.filename, d.file_size, d.mime_type,
+                   d.sha256_hash, d.category, d.sensitivity, d.owner_id, u.username as owner_username,
+                   d.allow_viewer_download, d.created_at, d.updated_at,
+                   CASE
+                       WHEN d.owner_id = ? THEN 'owner'
+                       ELSE 'admin'
+                   END as my_permission,
+                   1 as grant_can_download
+            FROM documents d
+            JOIN users u ON d.owner_id = u.id
+            LEFT JOIN document_permissions dp ON (dp.document_id = d.id AND dp.user_id = ?)
+            WHERE d.is_deleted = 0
+        """
+        params: list[Any] = [user_id, user_id]
+    else:
+        query = """
+            SELECT DISTINCT d.id, d.uuid, d.title, d.filename, d.file_size, d.mime_type,
+                   d.sha256_hash, d.category, d.sensitivity, d.owner_id, u.username as owner_username,
+                   d.allow_viewer_download, d.created_at, d.updated_at,
+                   CASE
+                       WHEN d.owner_id = ? THEN 'owner'
+                       WHEN dp.permission_level IS NOT NULL THEN dp.permission_level
+                       ELSE 'read'
+                   END as my_permission,
+                   COALESCE(dp.can_download, 0) as grant_can_download
+            FROM documents d
+            JOIN users u ON d.owner_id = u.id
+            LEFT JOIN document_permissions dp ON (dp.document_id = d.id AND dp.user_id = ?)
+            WHERE d.is_deleted = 0
+              AND (d.owner_id = ? OR dp.user_id = ?)
+        """
+        params: list[Any] = [user_id, user_id, user_id, user_id]
 
     if search:
         search_pattern = f"%{search.strip()}%"
@@ -669,25 +884,36 @@ def list_documents(
         cursor.execute(query, tuple(params))
         rows = cursor.fetchall()
 
-    return [
-        DocumentResponse(
-            id=r["id"],
-            uuid=r["uuid"],
-            title=r["title"],
-            filename=r["filename"],
-            file_size=r["file_size"],
-            mime_type=r["mime_type"],
-            sha256_hash=r["sha256_hash"],
-            category=r["category"],
-            sensitivity=r["sensitivity"],
-            owner_id=r["owner_id"],
-            owner_username=r["owner_username"],
-            my_permission=r["my_permission"],
-            created_at=r["created_at"],
-            updated_at=r["updated_at"],
+    is_viewer = current_user.get("role") == "viewer"
+    result: list[DocumentResponse] = []
+    for r in rows:
+        row_dict = dict(r)
+        allow_v_dl = bool(row_dict.get("allow_viewer_download", 0))
+        grant_dl = bool(row_dict.get("grant_can_download", 0))
+        can_dl = (allow_v_dl or grant_dl) if is_viewer else True
+
+        result.append(
+            DocumentResponse(
+                id=row_dict["id"],
+                uuid=row_dict["uuid"],
+                title=row_dict["title"],
+                filename=row_dict["filename"],
+                file_size=row_dict["file_size"],
+                mime_type=row_dict["mime_type"],
+                sha256_hash=row_dict["sha256_hash"],
+                category=row_dict["category"],
+                sensitivity=row_dict["sensitivity"],
+                owner_id=row_dict["owner_id"],
+                owner_username=row_dict["owner_username"],
+                my_permission=row_dict["my_permission"],
+                can_download=can_dl,
+                allow_viewer_download=allow_v_dl,
+                created_at=row_dict["created_at"],
+                updated_at=row_dict["updated_at"],
+            )
         )
-        for r in rows
-    ]
+
+    return result
 
 
 @app.get("/api/documents/{document_id}", response_model=DocumentResponse)
@@ -707,18 +933,24 @@ def get_document(
 
     # Determine caller's permission
     my_perm = "owner" if doc["owner_id"] == current_user["id"] else "read"
+    grant_can_dl = False
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT permission_level FROM document_permissions WHERE document_id = ? AND user_id = ?",
+            "SELECT permission_level, can_download FROM document_permissions WHERE document_id = ? AND user_id = ?",
             (document_id, current_user["id"]),
         )
         grant = cursor.fetchone()
         if grant:
             my_perm = grant["permission_level"]
+            grant_can_dl = bool(grant["can_download"]) if "can_download" in grant.keys() else False
         cursor.execute("SELECT username FROM users WHERE id = ?", (doc["owner_id"],))
         owner_row = cursor.fetchone()
         owner_username = owner_row["username"] if owner_row else "unknown"
+
+    is_viewer = current_user.get("role") == "viewer"
+    allow_v_dl = bool(doc.get("allow_viewer_download", 0))
+    can_dl = (allow_v_dl or grant_can_dl) if is_viewer else True
 
     record_audit_event(
         action="DOC_READ_METADATA",
@@ -745,8 +977,77 @@ def get_document(
         owner_id=doc["owner_id"],
         owner_username=owner_username,
         my_permission=my_perm,
+        can_download=can_dl,
+        allow_viewer_download=allow_v_dl,
         created_at=doc["created_at"],
         updated_at=doc["updated_at"],
+    )
+
+
+@app.get("/api/documents/{document_id}/preview")
+def preview_document(
+    document_id: int,
+    request: Request,
+    current_user: dict[str, Any] = Depends(get_current_user),
+):
+    """
+    IN-BROWSER PREVIEW ENDPOINT.
+    Decrypts and streams document payload with Content-Disposition: inline.
+    Permitted for all authorized readers (including viewers).
+    Zero-caching headers enforced to prevent proxy/browser persistence.
+    """
+    ip = get_client_ip(request)
+    ua = request.headers.get("user-agent", "")
+
+    doc = check_document_access(
+        user=current_user,
+        document_id=document_id,
+        required_action="preview",
+        ip_address=ip,
+        user_agent=ua,
+    )
+
+    try:
+        decrypted_content = VaultStorageManager.retrieve_file(doc["storage_path"])
+    except Exception as e:
+        record_audit_event(
+            action="DOC_PREVIEW_ERROR",
+            status="SECURITY_ALERT",
+            user_id=current_user["id"],
+            username=current_user["username"],
+            document_id=document_id,
+            document_title=doc["title"],
+            ip_address=ip,
+            user_agent=ua,
+            details=f"Decryption or storage retrieval error: {e!s}",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve or decrypt document for preview.",
+        )
+
+    record_audit_event(
+        action="DOC_PREVIEW",
+        status="SUCCESS",
+        user_id=current_user["id"],
+        username=current_user["username"],
+        document_id=document_id,
+        document_title=doc["title"],
+        ip_address=ip,
+        user_agent=ua,
+        details=f"Document preview rendered in browser ({len(decrypted_content)} bytes)",
+    )
+
+    headers = {
+        "Content-Disposition": f'inline; filename="{doc["filename"]}"',
+        "Content-Type": doc["mime_type"],
+        "Cache-Control": "no-store, no-cache, must-revalidate, private, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+        "X-Content-Type-Options": "nosniff",
+    }
+    return RawResponse(
+        content=decrypted_content, media_type=doc["mime_type"], headers=headers
     )
 
 
@@ -759,6 +1060,7 @@ def download_document(
     """
     CRITICAL SECURITY CHECKPOINT.
     Decrypts and streams document payload ONLY after authoritative authorization check.
+    Separate from preview: viewers are only permitted if document sharing policy allows download.
     Zero-caching headers enforced so browser and intermediate proxies never persist plaintext.
     """
     ip = get_client_ip(request)
@@ -768,7 +1070,7 @@ def download_document(
     doc = check_document_access(
         user=current_user,
         document_id=document_id,
-        required_action="read",
+        required_action="download",
         ip_address=ip,
         user_agent=ua,
     )
@@ -846,16 +1148,20 @@ def update_document(
     new_sensitivity = (
         update_data.sensitivity if update_data.sensitivity else doc["sensitivity"]
     )
+    if update_data.allow_viewer_download is not None:
+        new_allow_viewer_dl = 1 if update_data.allow_viewer_download else 0
+    else:
+        new_allow_viewer_dl = doc.get("allow_viewer_download", 0)
 
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
             UPDATE documents
-            SET title = ?, category = ?, sensitivity = ?, updated_at = ?
+            SET title = ?, category = ?, sensitivity = ?, allow_viewer_download = ?, updated_at = ?
             WHERE id = ?
         """,
-            (new_title, new_category, new_sensitivity, now_iso, document_id),
+            (new_title, new_category, new_sensitivity, new_allow_viewer_dl, now_iso, document_id),
         )
 
     record_audit_event(
@@ -867,7 +1173,7 @@ def update_document(
         document_title=new_title,
         ip_address=ip,
         user_agent=ua,
-        details=f"Updated document metadata: title='{new_title}', category='{new_category}', sensitivity='{new_sensitivity}'",
+        details=f"Updated document metadata: title='{new_title}', category='{new_category}', sensitivity='{new_sensitivity}', allow_viewer_download={bool(new_allow_viewer_dl)}",
     )
 
     return DocumentResponse(
@@ -881,6 +1187,8 @@ def update_document(
         category=new_category,
         sensitivity=new_sensitivity,
         owner_id=doc["owner_id"],
+        can_download=True,
+        allow_viewer_download=bool(new_allow_viewer_dl),
         created_at=doc["created_at"],
         updated_at=now_iso,
     )
@@ -965,6 +1273,8 @@ async def update_document_content(
         category=doc["category"],
         sensitivity=doc["sensitivity"],
         owner_id=doc["owner_id"],
+        can_download=True,
+        allow_viewer_download=bool(doc.get("allow_viewer_download", 0)),
         created_at=doc["created_at"],
         updated_at=now_iso,
     )
@@ -1049,7 +1359,7 @@ def list_document_permissions(
         cursor.execute(
             """
             SELECT dp.user_id, u.username, u.full_name, u.email, dp.permission_level,
-                   dp.granted_by, g.username as granted_by_username, dp.granted_at
+                   dp.can_download, dp.granted_by, g.username as granted_by_username, dp.granted_at
             FROM document_permissions dp
             JOIN users u ON dp.user_id = u.id
             JOIN users g ON dp.granted_by = g.id
@@ -1067,6 +1377,7 @@ def list_document_permissions(
             full_name=r["full_name"],
             email=r["email"],
             permission_level=r["permission_level"],
+            can_download=bool(r["can_download"]) if "can_download" in r.keys() else False,
             granted_by=r["granted_by"],
             granted_by_username=r["granted_by_username"],
             granted_at=r["granted_at"],
@@ -1101,7 +1412,7 @@ def grant_document_permission(
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, username, email, full_name, is_active FROM users WHERE username = ? OR id = ?",
+            "SELECT id, username, email, full_name, role, is_active FROM users WHERE username = ? OR id = ?",
             (grant_req.target_username_or_id, grant_req.target_username_or_id),
         )
         target_user = cursor.fetchone()
@@ -1117,6 +1428,14 @@ def grant_document_permission(
             detail="Cannot grant permission to yourself; you are already the owner.",
         )
 
+    # Viewers are read-only and cannot receive edit permissions
+    if target_user["role"] == "viewer" and grant_req.permission_level == "edit":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Target user has the 'viewer' role which is strictly read-only. Edit permission cannot be granted to viewers.",
+        )
+
+    can_download_val = 1 if grant_req.can_download else 0
     now_iso = datetime.now(UTC).isoformat()
 
     # Insert or update permission grant
@@ -1124,10 +1443,11 @@ def grant_document_permission(
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO document_permissions (document_id, user_id, permission_level, granted_by, granted_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO document_permissions (document_id, user_id, permission_level, can_download, granted_by, granted_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(document_id, user_id) DO UPDATE SET
                 permission_level = excluded.permission_level,
+                can_download = excluded.can_download,
                 granted_by = excluded.granted_by,
                 granted_at = excluded.granted_at
         """,
@@ -1135,6 +1455,7 @@ def grant_document_permission(
                 document_id,
                 target_user["id"],
                 grant_req.permission_level,
+                can_download_val,
                 current_user["id"],
                 now_iso,
             ),
@@ -1149,7 +1470,7 @@ def grant_document_permission(
         document_title=doc["title"],
         ip_address=ip,
         user_agent=ua,
-        details=f"Granted '{grant_req.permission_level}' access to user '{target_user['username']}' (ID {target_user['id']})",
+        details=f"Granted '{grant_req.permission_level}' (can_download={bool(can_download_val)}) access to user '{target_user['username']}' (ID {target_user['id']})",
     )
 
     return {
@@ -1157,6 +1478,7 @@ def grant_document_permission(
         "target_user_id": target_user["id"],
         "target_username": target_user["username"],
         "permission_level": grant_req.permission_level,
+        "can_download": bool(can_download_val),
     }
 
 
@@ -1331,6 +1653,7 @@ def ai_confirm_access(
 def view_audit_log(
     request: Request,
     document_id: int | None = None,
+    mine: bool = False,
     limit: int = 100,
     offset: int = 0,
     current_user: dict[str, Any] = Depends(get_current_user),
@@ -1339,7 +1662,8 @@ def view_audit_log(
     Retrieves audit logs.
     - Document Owner: Can view audit logs for documents they own.
     - Administrator: Can view system-wide audit logs.
-    - Viewers: Cannot access system audit logs (returns 403).
+    - Viewers: Can view their own activity history.
+    - Non-admins attempting global audit inspection are refused with 403.
     """
     role = current_user["role"]
 
@@ -1366,22 +1690,41 @@ def view_audit_log(
                 status_code=403,
                 detail="Audit log inspection for this document requires ownership or administrative privileges.",
             )
-    else:
-        # Global audit log view: strictly administrator
-        if role != "admin":
-            record_audit_event(
-                action="GLOBAL_AUDIT_VIEW_DENIED",
-                status="REFUSED",
-                user_id=current_user["id"],
-                username=current_user["username"],
-                details=f"Non-admin user '{current_user['username']}' attempted global audit trail inspection.",
-            )
-            raise HTTPException(
-                status_code=403,
-                detail="Global audit log inspection is restricted to platform administrators.",
-            )
+        return get_audit_trail(document_id=document_id, limit=limit, offset=offset)
 
-    logs = get_audit_trail(document_id=document_id, limit=limit, offset=offset)
+    if mine:
+        # Allow user to inspect their own activity history
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, sequence_number, timestamp, user_id, username, action,
+                       document_id, document_title, status, ip_address, details,
+                       previous_hash, entry_hash
+                FROM audit_logs
+                WHERE user_id = ?
+                ORDER BY sequence_number DESC
+                LIMIT ? OFFSET ?
+            """,
+                (current_user["id"], limit, offset),
+            )
+            return [dict(r) for r in cursor.fetchall()]
+
+    # Global audit log view: strictly administrator
+    if role != "admin":
+        record_audit_event(
+            action="GLOBAL_AUDIT_VIEW_DENIED",
+            status="REFUSED",
+            user_id=current_user["id"],
+            username=current_user["username"],
+            details=f"Non-admin user '{current_user['username']}' attempted global audit trail inspection.",
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Global audit log inspection is restricted to platform administrators.",
+        )
+
+    logs = get_audit_trail(document_id=None, limit=limit, offset=offset)
     return logs
 
 
@@ -1437,6 +1780,11 @@ def get_security_alerts(
 # Static Files & Single Page Application Serving
 # ==============================================================================
 
+dist_path = BASE_DIR / "frontend" / "dist"
+assets_path = dist_path / "assets"
+if assets_path.exists():
+    app.mount("/assets", StaticFiles(directory=str(assets_path)), name="assets")
+
 frontend_path = BASE_DIR / "frontend"
 if frontend_path.exists():
     app.mount("/static", StaticFiles(directory=str(frontend_path)), name="static")
@@ -1445,9 +1793,12 @@ if frontend_path.exists():
 @app.get("/")
 def serve_index():
     """Serves the TrustVault Single Page Application interface."""
-    index_file = BASE_DIR / "frontend" / "index.html"
-    if index_file.exists():
-        return FileResponse(index_file)
+    dist_index = BASE_DIR / "frontend" / "dist" / "index.html"
+    if dist_index.exists():
+        return FileResponse(dist_index)
+    src_index = BASE_DIR / "frontend" / "index.html"
+    if src_index.exists():
+        return FileResponse(src_index)
     return {"message": "TrustVault Security API is active. Frontend is loading."}
 
 
