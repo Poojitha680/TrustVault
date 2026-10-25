@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  trustvault:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trustvault-platform
+    ports:
+      - "8000:8000"
+    environment:
+      - VAULT_MASTER_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      - AUDIT_SECRET_KEY=trustvault_audit_hmac_secret_key_2026_top_secret_integrity
+      - JWT_SECRET_KEY=trustvault_jwt_secret_production_key_2026_super_secure
+    volumes:
+      - trustvault_data:/app/vault_storage
+      - ./trustvault.db:/app/trustvault.db
+    restart: unless-stopped
+
+volumes:
+  trustvault_data:

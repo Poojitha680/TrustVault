@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: trustvault-platform
+    env: python
+    buildCommand: "pip install -r requirements.txt && cd frontend && npm install && npm run build && cd .."
+    startCommand: "uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: VAULT_MASTER_KEY
+        generateValue: true
+      - key: AUDIT_SECRET_KEY
+        generateValue: true
+      - key: JWT_SECRET_KEY
+        generateValue: true
